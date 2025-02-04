@@ -1,0 +1,141 @@
+using System;
+using System.Data.SqlClient;
+using Symbol.Barcode;  // Zebra Scanner SDK
+using System.Collections.Generic;
+
+class Program
+{
+    private static string connectionString = "Server=YOUR_SERVER;Database=YOUR_DB;User Id=YOUR_USER;Password=YOUR_PASSWORD;";
+
+    static void Main()
+    {
+        Console.WriteLine("🚀 Laptop Tracking System Started!");
+        Console.WriteLine("Waiting for QR code scans...");
+
+        // Initialize Zebra Scanner
+        BarcodeScanner scanner = new BarcodeScanner();
+        scanner.DataReceived += OnScanReceived;
+        scanner.Open();
+
+        Console.ReadLine(); // Keeps the console app running
+    }
+
+    static void OnScanReceived(object sender, ScanDataReceivedEventArgs e)
+    {
+        string scannedData = e.Text;  // Extract Laptop ID from QR Code
+        string scannerId = GetScannerId(sender);  // Get Scanner Device Name
+
+        string location = MapScannerToLocation(scannerId);
+        if (location != "Unknown")
+        {
+            Console.WriteLine($"\n✅ QR Code Scanned: {scannedData}");
+            Console.WriteLine($"📍 Scanner Location: {location}");
+
+            UpdateLaptopLocation(scannedData, location);
+        }
+        else
+        {
+            Console.WriteLine("❌ Unrecognized scanner. No update made.");
+        }
+    }
+
+    static string GetScannerId(object sender)
+    {
+        BarcodeScanner scanner = sender as BarcodeScanner;
+        return scanner.DeviceName;  // Returns the FS40 Scanner ID
+    }
+
+    static string MapScannerToLocation(string scannerId)
+    {
+        // Define scanner locations
+        var scannerMap = new Dictionary<string, string>
+        {
+            { "FS40_IT_Store", "IT Store" },
+            { "FS40_IT_Maintenance", "IT Maintenance" }
+        };
+
+        return scannerMap.ContainsKey(scannerId) ? scannerMap[scannerId] : "Unknown";
+    }
+
+    static void UpdateLaptopLocation(string laptopId, string location)
+    {
+        string newStatus = GetStatusBasedOnLocation(location);
+
+        using (SqlConnection conn = new SqlConnection(connectionString))
+        {
+            conn.Open();
+            string updateQuery = "UPDATE Laptops SET CurrentLocation = @location, Status = @status, LastUpdated = GETDATE() WHERE LaptopID = @laptopId";
+
+            using (SqlCommand cmd = new SqlCommand(updateQuery, conn))
+            {
+                cmd.Parameters.AddWithValue("@location", location);
+                cmd.Parameters.AddWithValue("@status", newStatus);
+                cmd.Parameters.AddWithValue("@laptopId", laptopId);
+
+                int rowsAffected = cmd.ExecuteNonQuery();
+
+                if (rowsAffected > 0)
+                {
+                    Console.WriteLine($"✅ Laptop {laptopId} updated to {location}");
+                    LogHistory(laptopId, location, newStatus);
+                }
+                else
+                {
+                    Console.WriteLine($"⚠️ Laptop {laptopId} not found. Adding new entry...");
+                    InsertNewLaptop(laptopId, location, newStatus);
+                }
+            }
+        }
+    }
+
+    static void InsertNewLaptop(string laptopId, string location, string status)
+    {
+        using (SqlConnection conn = new SqlConnection(connectionString))
+        {
+            conn.Open();
+            string insertQuery = "INSERT INTO Laptops (LaptopID, SerialNumber, CurrentLocation, Status) VALUES (@laptopId, @serial, @location, @status)";
+
+            using (SqlCommand cmd = new SqlCommand(insertQuery, conn))
+            {
+                cmd.Parameters.AddWithValue("@laptopId", laptopId);
+                cmd.Parameters.AddWithValue("@serial", "UnknownSerial");
+                cmd.Parameters.AddWithValue("@location", location);
+                cmd.Parameters.AddWithValue("@status", status);
+
+                cmd.ExecuteNonQuery();
+                LogHistory(laptopId, location, status);
+
+                Console.WriteLine($"✅ New Laptop {laptopId} added and assigned to {location}");
+            }
+        }
+    }
+
+    static void LogHistory(string laptopId, string location, string status)
+    {
+        using (SqlConnection conn = new SqlConnection(connectionString))
+        {
+            conn.Open();
+            string historyQuery = "INSERT INTO LaptopTrackingHistory (LaptopID, ScannedAt, Status) VALUES (@laptopId, @location, @status)";
+
+            using (SqlCommand cmd = new SqlCommand(historyQuery, conn))
+            {
+                cmd.Parameters.AddWithValue("@laptopId", laptopId);
+                cmd.Parameters.AddWithValue("@location", location);
+                cmd.Parameters.AddWithValue("@status", status);
+
+                cmd.ExecuteNonQuery();
+                Console.WriteLine($"📜 Tracking history logged for {laptopId}");
+            }
+        }
+    }
+
+    static string GetStatusBasedOnLocation(string location)
+    {
+        return location switch
+        {
+            "IT Store" => "Stored in IT Store",
+            "IT Maintenance" => "Configuring",
+            _ => "Unknown"
+        };
+    }
+}
